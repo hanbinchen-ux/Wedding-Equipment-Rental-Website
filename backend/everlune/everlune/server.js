@@ -155,6 +155,30 @@ const products = [
 
 const orders = [];
 
+function isAvailable(productId, size, startDate, endDate) {
+  for (const order of orders) {
+    if (order.status === 'cancelled') {
+      continue;
+    }
+
+    const overlap =
+      startDate <= order.endDate &&
+      endDate >= order.startDate;
+
+    if (overlap) {
+      const booked = order.items.some(item =>
+        item.id === productId && item.size === size
+      );
+
+      if (booked) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 app.get('/api/products', (req, res) => {
   res.json(products);
 });
@@ -172,9 +196,56 @@ app.get('/api/products/:id', (req, res) => {
   res.json(product);
 });
 
+app.get('/api/availability', (req, res) => {
+  const { productId, size, startDate, endDate } = req.query;
+
+  const product = products.find(p => p.id === productId);
+
+  if (!product) {
+    return res.status(404).json({
+      success: false,
+      message: 'Product not found.'
+    });
+  }
+
+  if (!product.sizes.includes(size)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid product size.'
+    });
+  }
+
+  const validDate = date => {
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return false;
+    }
+
+    const parsed = new Date(date + 'T00:00:00Z');
+
+    return !isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === date;
+  };
+
+  if (!validDate(startDate) || !validDate(endDate) || endDate < startDate) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid rental dates.'
+    });
+  }
+
+  res.json({
+    success: true,
+    productId,
+    size,
+    startDate,
+    endDate,
+    available: isAvailable(productId, size, startDate, endDate)
+  });
+});
+
 // Simulated checkout API endpoint
 app.post('/api/checkout', (req, res) => {
-  const { customer, items, paymentMethod } = req.body || {};
+  const { customer, items, paymentMethod,startDate,endDate } = req.body || {};
 
   if (
     !customer ||
@@ -202,6 +273,31 @@ app.post('/api/checkout', (req, res) => {
       message: 'Invalid payment method.'
     });
   }
+
+const validDate = (date) => {
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return false;
+  }
+
+  const parsed = new Date(date + 'T00:00:00Z');
+
+  return !isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === date;
+};
+
+if (!validDate(startDate) || !validDate(endDate)) {
+  return res.status(400).json({
+    success: false,
+    message: 'Please select valid rental dates.'
+  });
+}
+
+if (endDate < startDate) {
+  return res.status(400).json({
+    success: false,
+    message: 'End date cannot be earlier than start date.'
+  });
+}  
 
   let total = 0;
   const orderItems = [];
@@ -243,6 +339,23 @@ app.post('/api/checkout', (req, res) => {
       });
     }
 
+if (quantity > 1 || orderItems.some(
+  existing => existing.id === product.id && existing.size === size
+)) {
+  return res.status(400).json({
+    success: false,
+    message: 'Only one item per product and size is available.'
+  });
+}
+
+if (!isAvailable(product.id, size, startDate, endDate)) {
+  return res.status(409).json({
+    success: false,
+    message: `${product.name} is unavailable for the selected dates.`
+  });
+}
+
+
     const subtotal = product.price * quantity;
     total += subtotal;
 
@@ -264,6 +377,8 @@ app.post('/api/checkout', (req, res) => {
     customer,
     items: orderItems,
     paymentMethod,
+    startDate,
+    endDate,
     total,
     status: 'pending',
     createdAt: new Date().toISOString()
@@ -281,6 +396,8 @@ app.post('/api/checkout', (req, res) => {
     orderId,
     total,
     paymentMethod,
+    startDate,
+    endDate,
     bankDetails: paymentMethod === 'bank_transfer' ? {
       accountName: 'DEMO ONLY - DO NOT PAY',
       commBank: {
